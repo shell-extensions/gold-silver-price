@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.gold-silver-price" path="/org/gnome/shell/extensions/gold-silver-price/">
+    <key name="visible-metals" type="as">
+      <default>['gold', 'silver']</default>
+      <summary>Visible metals in the top bar</summary>
+      <description>List of metal IDs that should be shown in the panel indicator.</description>
+    </key>
+    <key name="custom-metals" type="as">
+      <default>[]</default>
+      <summary>Custom metals list</summary>
+      <description>JSON strings describing custom metals with id, name, and url.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -16,26 +16,39 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-'use strict'
+'use strict';
 
 import St from 'gi://St';
 import Gio from 'gi://Gio';
-import GLib from 'gi://GLib'
-
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-function exec(command) {
-    try {
-        GLib.spawn_command_line_async(command)
-    } catch (e) {
-        logError(e)
-    }
-}
+const PRICE_REFRESH_MS = 5 * 60 * 1000;
+const PRICE_PATTERN = '<div [^>]*class="[^"]*YMlKec fxKbKc[^"]*"[^>]*>\\s*\\K[^<]+';
+const VISIBLE_METALS_KEY = 'visible-metals';
+const CUSTOM_METALS_KEY = 'custom-metals';
+
+const BASE_METALS = [
+    {
+        id: 'gold',
+        name: 'Gold',
+        url: 'https://www.google.com/finance/quote/GCW00:COMEX',
+    },
+    {
+        id: 'silver',
+        name: 'Silver',
+        url: 'https://www.google.com/finance/quote/SIW00:COMEX',
+    },
+];
 
 function openUrl(url) {
-    exec(`xdg-open ${url}`)
+    try {
+        Gio.Subprocess.new(['xdg-open', url], Gio.SubprocessFlags.NONE);
+    } catch (error) {
+        logError(error);
+    }
 }
 
 function executeCommandAsync(command) {
@@ -67,46 +80,284 @@ function executeCommandAsync(command) {
     });
 }
 
+function shellEscape(value) {
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function clearChildren(actor) {
+    for (const child of actor.get_children()) {
+        child.destroy();
+    }
+}
+
+function parseCustomMetals(raw) {
+    const metals = [];
+
+    for (const entry of raw) {
+        try {
+            const metal = JSON.parse(entry);
+            if (!metal || typeof metal !== 'object') {
+                continue;
+            }
+
+            const id = typeof metal.id === 'string' ? metal.id.trim() : '';
+            const name = typeof metal.name === 'string' ? metal.name.trim() : '';
+            const url = typeof metal.url === 'string' ? metal.url.trim() : '';
+
+            if (!id || !name || !url) {
+                continue;
+            }
+
+            metals.push({ id, name, url, custom: true });
+        } catch {
+            continue;
+        }
+    }
+
+    return metals;
+}
+
 export default class GoldSilverPriceGnomeExtension extends Extension {
     enable() {
-        this._silverButton = new St.Button({ label: "" });
-        this._silverButton.connect('clicked', () => openUrl('https://www.google.com/finance/quote/SIW00:COMEX'));
-        this._silverIndicator = new PanelMenu.Button(0.0, this.metadata.name + '-silver', false);
-        this._silverIndicator.add_child(this._silverButton);
-        Main.panel.addToStatusArea(this.uuid + '-silver', this._silverIndicator);
+        this._settings = this.getSettings();
+        this._settingsChangedId = this._settings.connect('changed', () => this._rebuildUi());
 
-        this._goldButton = new St.Button({ label: "" });
-        this._goldButton.connect('clicked', () => openUrl('https://www.google.com/finance/quote/GCW00:COMEX'));
-        this._goldIndicator = new PanelMenu.Button(0.0, this.metadata.name + '-gold', false);
-        this._goldIndicator.add_child(this._goldButton);
-        Main.panel.addToStatusArea(this.uuid + '-gold', this._goldIndicator);
+        this._indicator = new PanelMenu.Button(0.0, this.metadata.name, false);
+        this._panelBox = new St.BoxLayout({ style_class: 'panel-status-menu-box', spacing: 6 });
+        this._indicator.add_child(this._panelBox);
+        Main.panel.addToStatusArea(this.uuid, this._indicator);
 
-        this.downloadData();
+        this._priceCache = new Map();
 
-        // 5 minutes
-        this.refreshInterval = setInterval(() => this.downloadData(), 5 * 60 * 1000)
+        this._rebuildUi();
+        this._refreshPrices();
+
+        this._refreshInterval = setInterval(() => this._refreshPrices(), PRICE_REFRESH_MS);
     }
 
     disable() {
-        clearInterval(this.refreshInterval)
-        this.refreshInterval = null
+        if (this._refreshInterval) {
+            clearInterval(this._refreshInterval);
+            this._refreshInterval = null;
+        }
 
-        this._silverIndicator?.destroy();
-        this._silverIndicator = null;
-        this._silverButton = null;
+        if (this._settings && this._settingsChangedId) {
+            this._settings.disconnect(this._settingsChangedId);
+            this._settingsChangedId = null;
+        }
 
-        this._goldIndicator?.destroy();
-        this._goldIndicator = null;
-        this._goldButton = null;
+        this._indicator?.destroy();
+        this._indicator = null;
+        this._panelBox = null;
+        this._menuPriceItems = null;
+        this._menuToggleItems = null;
+        this._panelLabels = null;
+        this._priceCache = null;
+        this._metals = null;
+        this._metalById = null;
+        this._visibleIds = null;
+        this._settings = null;
     }
 
-    downloadData() {
-        executeCommandAsync('curl -s https://www.google.com/finance/quote/GCW00:COMEX | grep -oP \'<div [^>]*class="[^"]*YMlKec fxKbKc[^"]*"[^>]*>\\s*\\K[^<]+\' | tr -d \',$\'')
-            .then((value) => this._goldButton.label = value + '$')
-            .catch((error) => this._goldButton.label = '...');
+    _rebuildUi() {
+        this._metals = this._getAllMetals();
+        this._metalById = new Map(this._metals.map((metal) => [metal.id, metal]));
+        this._visibleIds = this._getVisibleIds();
 
-        executeCommandAsync('curl -s https://www.google.com/finance/quote/SIW00:COMEX | grep -oP \'<div [^>]*class="[^"]*YMlKec fxKbKc[^"]*"[^>]*>\\s*\\K[^<]+\' | tr -d \',$\'')
-            .then((value) => this._silverButton.label = value + '$')
-            .catch((error) => this._silverButton.label = '...');
+        this._buildPanel();
+        this._buildMenu();
+        this._updateToggleSensitivity();
+
+        for (const metal of this._metals) {
+            this._updateMetalLabels(metal.id);
+        }
+    }
+
+    _getAllMetals() {
+        const metals = [...BASE_METALS];
+        const existingIds = new Set(metals.map((metal) => metal.id));
+
+        for (const custom of parseCustomMetals(this._settings.get_strv(CUSTOM_METALS_KEY))) {
+            if (existingIds.has(custom.id)) {
+                continue;
+            }
+
+            metals.push(custom);
+            existingIds.add(custom.id);
+        }
+
+        return metals;
+    }
+
+    _getVisibleIds() {
+        const validIds = new Set(this._metals.map((metal) => metal.id));
+        const configured = this._settings.get_strv(VISIBLE_METALS_KEY);
+        const unique = [];
+        const seen = new Set();
+
+        for (const id of configured) {
+            if (validIds.has(id) && !seen.has(id)) {
+                unique.push(id);
+                seen.add(id);
+            }
+        }
+
+        let visible = unique;
+        if (visible.length === 0 && this._metals.length > 0) {
+            visible = [this._metals[0].id];
+            this._settings.set_strv(VISIBLE_METALS_KEY, visible);
+        } else if (visible.length !== configured.length) {
+            this._settings.set_strv(VISIBLE_METALS_KEY, visible);
+        }
+
+        return visible;
+    }
+
+    _buildPanel() {
+        clearChildren(this._panelBox);
+        this._panelLabels = new Map();
+
+        for (const id of this._orderedVisibleIds()) {
+            const metal = this._metalById.get(id);
+            if (!metal) {
+                continue;
+            }
+
+            const label = new St.Label({ text: this._formatPanelLabel(metal) });
+            this._panelBox.add_child(label);
+            this._panelLabels.set(id, label);
+        }
+    }
+
+    _buildMenu() {
+        this._indicator.menu.removeAll();
+        this._menuPriceItems = new Map();
+        this._menuToggleItems = new Map();
+
+        const pricesSection = new PopupMenu.PopupMenuSection();
+        for (const metal of this._metals) {
+            const item = new PopupMenu.PopupMenuItem(this._formatMenuLabel(metal));
+            item.connect('activate', () => openUrl(metal.url));
+            pricesSection.addMenuItem(item);
+            this._menuPriceItems.set(metal.id, item);
+        }
+        this._indicator.menu.addMenuItem(pricesSection);
+
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const visibilitySection = new PopupMenu.PopupMenuSection();
+        for (const metal of this._metals) {
+            const toggle = new PopupMenu.PopupSwitchMenuItem(
+                metal.name,
+                this._visibleIds.includes(metal.id)
+            );
+            toggle.connect('toggled', (item, state) => this._onToggleMetal(metal.id, state));
+            visibilitySection.addMenuItem(toggle);
+            this._menuToggleItems.set(metal.id, toggle);
+        }
+        this._indicator.menu.addMenuItem(visibilitySection);
+
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const optionsItem = new PopupMenu.PopupMenuItem(_('Options...'));
+        optionsItem.connect('activate', () => this.openPreferences());
+        this._indicator.menu.addMenuItem(optionsItem);
+    }
+
+    _orderedVisibleIds() {
+        const visibleSet = new Set(this._visibleIds);
+        return this._metals.map((metal) => metal.id).filter((id) => visibleSet.has(id));
+    }
+
+    _updateToggleSensitivity() {
+        const visibleSet = new Set(this._visibleIds);
+
+        if (visibleSet.size === 1) {
+            const [onlyId] = visibleSet;
+            for (const [id, item] of this._menuToggleItems) {
+                item.setSensitive(id !== onlyId);
+            }
+        } else {
+            for (const item of this._menuToggleItems.values()) {
+                item.setSensitive(true);
+            }
+        }
+    }
+
+    _onToggleMetal(id, state) {
+        const visibleSet = new Set(this._visibleIds);
+
+        if (state) {
+            visibleSet.add(id);
+        } else {
+            visibleSet.delete(id);
+        }
+
+        if (visibleSet.size === 0) {
+            const toggle = this._menuToggleItems.get(id);
+            if (toggle) {
+                toggle.setToggleState(true);
+            }
+            return;
+        }
+
+        const ordered = this._metals
+            .map((metal) => metal.id)
+            .filter((metalId) => visibleSet.has(metalId));
+
+        this._settings.set_strv(VISIBLE_METALS_KEY, ordered);
+    }
+
+    _formatPanelLabel(metal, value = null) {
+        if (!value) {
+            return `${metal.name} ...`;
+        }
+
+        return `${metal.name} ${value}$`;
+    }
+
+    _formatMenuLabel(metal, value = null) {
+        if (!value) {
+            return `${metal.name}: ...`;
+        }
+
+        return `${metal.name}: ${value}$`;
+    }
+
+    _updateMetalLabels(id) {
+        const metal = this._metalById.get(id);
+        if (!metal) {
+            return;
+        }
+
+        const value = this._priceCache.get(id) ?? null;
+        const panelLabel = this._panelLabels.get(id);
+        if (panelLabel) {
+            panelLabel.text = this._formatPanelLabel(metal, value);
+        }
+
+        const menuItem = this._menuPriceItems.get(id);
+        if (menuItem) {
+            menuItem.label.text = this._formatMenuLabel(metal, value);
+        }
+    }
+
+    _fetchPrice(url) {
+        const command = `curl -s ${shellEscape(url)} | grep -oP '${PRICE_PATTERN}' | tr -d ',$'`;
+        return executeCommandAsync(command);
+    }
+
+    _refreshPrices() {
+        for (const metal of this._metals) {
+            this._fetchPrice(metal.url)
+                .then((value) => {
+                    this._priceCache.set(metal.id, value);
+                    this._updateMetalLabels(metal.id);
+                })
+                .catch(() => {
+                    this._priceCache.set(metal.id, null);
+                    this._updateMetalLabels(metal.id);
+                });
+        }
     }
 }
