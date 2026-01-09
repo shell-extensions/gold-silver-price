@@ -120,7 +120,9 @@ function parseCustomMetals(raw) {
 export default class GoldSilverPriceGnomeExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
-        this._settingsChangedId = this._settings.connect('changed', () => this._rebuildUi());
+        this._settingsChangedId = this._settings.connect('changed', (settings, key) => {
+            this._onSettingsChanged(key);
+        });
 
         this._indicator = new PanelMenu.Button(0.0, this.metadata.name, false);
         this._panelBox = new St.BoxLayout({ style_class: 'panel-status-menu-box', style: 'spacing: 6px;' });
@@ -157,6 +159,21 @@ export default class GoldSilverPriceGnomeExtension extends Extension {
         this._metalById = null;
         this._visibleIds = null;
         this._settings = null;
+    }
+
+    _onSettingsChanged(key) {
+        const previousIds = this._metals
+            ? new Set(this._metals.map((metal) => metal.id))
+            : new Set();
+
+        this._rebuildUi();
+
+        if (key === CUSTOM_METALS_KEY) {
+            const newMetals = this._metals.filter((metal) => !previousIds.has(metal.id));
+            if (newMetals.length > 0) {
+                this._refreshPrices(newMetals);
+            }
+        }
     }
 
     _rebuildUi() {
@@ -347,8 +364,12 @@ export default class GoldSilverPriceGnomeExtension extends Extension {
         return executeCommandAsync(command);
     }
 
-    _refreshPrices() {
-        for (const metal of this._metals) {
+    _refreshPrices(metals = this._metals) {
+        if (!metals) {
+            return;
+        }
+
+        for (const metal of metals) {
             this._fetchPrice(metal.url)
                 .then((value) => {
                     this._priceCache.set(metal.id, value);
