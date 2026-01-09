@@ -35,3 +35,7 @@
 - Consolidated the top bar into a single indicator with a menu listing all prices and visibility toggles.
 - Added a preferences window for custom metals (name + Google Finance URL).
 - Introduced GSettings keys for visible metals and custom metal storage.
+- Fixed prefs import to use the GNOME Extensions resource path for GNOME 46.
+- Expanded supported shell versions in metadata to include 46 and 47.
+- Replaced `St.BoxLayout` spacing property with inline CSS spacing to avoid "No property spacing" errors.
+- Made `Adw.EntryRow` placeholders conditional on the `placeholder-text` property to support older libadwaita versions.

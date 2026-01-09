@@ -123,7 +123,7 @@ export default class GoldSilverPriceGnomeExtension extends Extension {
         this._settingsChangedId = this._settings.connect('changed', () => this._rebuildUi());
 
         this._indicator = new PanelMenu.Button(0.0, this.metadata.name, false);
-        this._panelBox = new St.BoxLayout({ style_class: 'panel-status-menu-box', spacing: 6 });
+        this._panelBox = new St.BoxLayout({ style_class: 'panel-status-menu-box', style: 'spacing: 6px;' });
         this._indicator.add_child(this._panelBox);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
 

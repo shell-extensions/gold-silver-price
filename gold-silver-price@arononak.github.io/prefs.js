@@ -3,11 +3,12 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 
-import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const CUSTOM_METALS_KEY = 'custom-metals';
 const VISIBLE_METALS_KEY = 'visible-metals';
 const RESERVED_IDS = new Set(['gold', 'silver']);
+const ENTRY_ROW_PROPS = new Set(Adw.EntryRow.list_properties().map((prop) => prop.name));
 
 function parseCustomMetals(settings) {
     const raw = settings.get_strv(CUSTOM_METALS_KEY);
@@ -75,6 +76,12 @@ function clearContainer(container) {
     }
 }
 
+function setEntryRowPlaceholder(row, text) {
+    if (ENTRY_ROW_PROPS.has('placeholder-text')) {
+        row.placeholder_text = text;
+    }
+}
+
 export default class GoldSilverPricePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
@@ -85,14 +92,10 @@ export default class GoldSilverPricePreferences extends ExtensionPreferences {
         window.add(page);
 
         const addGroup = new Adw.PreferencesGroup({ title: _('Add Custom Metal') });
-        const nameRow = new Adw.EntryRow({
-            title: _('Name'),
-            placeholder_text: _('Platinum'),
-        });
-        const urlRow = new Adw.EntryRow({
-            title: _('Google Finance URL'),
-            placeholder_text: _('https://www.google.com/finance/quote/PLW00:COMEX'),
-        });
+        const nameRow = new Adw.EntryRow({ title: _('Name') });
+        setEntryRowPlaceholder(nameRow, _('Platinum'));
+        const urlRow = new Adw.EntryRow({ title: _('Google Finance URL') });
+        setEntryRowPlaceholder(urlRow, _('https://www.google.com/finance/quote/PLW00:COMEX'));
         const addRow = new Adw.ActionRow({ title: _('Add to list') });
         const addButton = new Gtk.Button({ label: _('Add') });
 
